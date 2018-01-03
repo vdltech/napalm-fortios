@@ -26,6 +26,7 @@ try:
 except ImportError:
     from napalm_base.base import NetworkDriver
 
+
 class FortiOSDriver(NetworkDriver):
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
         self.hostname = hostname
