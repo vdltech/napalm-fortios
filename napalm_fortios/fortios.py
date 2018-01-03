@@ -16,12 +16,15 @@ from __future__ import unicode_literals
 import re
 from pyFG.fortios import FortiOS, FortiConfig, logger
 from pyFG.exceptions import FailedCommit, CommandExecutionException
-from napalm_base.base import NetworkDriver
 from napalm_base.exceptions import ReplaceConfigException, MergeConfigException
 from napalm_base.utils.string_parsers import colon_separated_string_to_dict,\
                                              convert_uptime_string_seconds
 from napalm_base.utils import py23_compat
 
+try:
+    from napalm.base.base import NetworkDriver
+except ImportError:
+    from napalm_base.base import NetworkDriver
 
 class FortiOSDriver(NetworkDriver):
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
