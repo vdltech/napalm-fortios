@@ -20,6 +20,7 @@ from napalm_base.exceptions import ReplaceConfigException, MergeConfigException
 from napalm_base.utils.string_parsers import colon_separated_string_to_dict,\
                                              convert_uptime_string_seconds
 from napalm_base.utils import py23_compat
+import napalm_base.helpers
 
 try:
     from napalm.base.base import NetworkDriver
@@ -512,3 +513,24 @@ class FortiOSDriver(NetworkDriver):
         out['power'] = {t: {'status': True, 'capacity': -1.0, 'output': -1.0} for t in psus}
 
         return out
+
+    def get_arp_table(self):
+
+        arp_table = []
+        command = "get sys arp"
+        output = self._execute_command_with_vdom(command)
+
+        # Skip the first line which is a header
+        output = output[1:]
+
+        for line in output:
+            if len(line) > 0:
+                address, age, mac, interface = line.split()
+                entry = {
+                    "interface": interface,
+                    "mac": napalm_base.helpers.mac(mac).rstrip(),
+                    "ip": address,
+                    "age": age.replace("-", "-1"),
+                }
+                arp_table.append(entry)
+        return arp_table
