@@ -1,0 +1,20 @@
+== [onboard]
+        ==[mgmt]
+                mode: static
+                ip: 192.168.1.99 255.255.255.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+        ==[port1]
+                mode: static
+                ip: 10.0.96.152 255.255.224.0
+                ipv6: fd00:d051::10:0:96:152/64
+                status: up
+                speed: 1000Mbps (Duplex: full)
+        ==[port2]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+

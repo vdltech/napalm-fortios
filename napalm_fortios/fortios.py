@@ -266,6 +266,27 @@ class FortiOSDriver(NetworkDriver):
             interface_statistics[interface] = parsed_data
         return interface_statistics
 
+    def get_interfaces_ip(self):
+        cmd = self._execute_command_with_vdom('get system interface physical', vdom='global')
+        interface_ip_dictionary = {}
+        if_name = None
+        for line in cmd:
+            interface_data = line.strip().split()
+            if len(interface_data)==0:
+                continue
+            if interface_data[0].startswith('==['):
+                m = re.search("==\[(.+)\]", interface_data[0])
+                if_name = m.group(1)
+            if if_name and interface_data[0]=="ip:" and interface_data[1][0]!='0':
+                interface_ip_dictionary[if_name]={}
+                interface_ip_dictionary[if_name]["ipv4"]={interface_data[1]: {'prefix_length': sum(bin(int(x)).count('1') for x in interface_data[2].split('.'))}}
+            if if_name and interface_data[0]=="ipv6:" and interface_data[1][0]!=':':
+                try:
+                    interface_ip_dictionary[if_name]["ipv6"]={interface_data[1].split('/')[0]: {'prefix_length': interface_data[1].split('/')[1]}}
+                except:
+                    interface_ip_dictionary[if_name]={"ipv6": {interface_data[1].split('/')[0]: {'prefix_length': interface_data[1].split('/')[1]}}}
+        return interface_ip_dictionary
+
     @staticmethod
     def _search_line_in_lines(search, lines):
         for l in lines:

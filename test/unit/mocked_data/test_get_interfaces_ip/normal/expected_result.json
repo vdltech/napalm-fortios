@@ -1,0 +1,1 @@
+{'mgmt': {'ipv4': {'192.168.1.99': {'prefix_length': 24}}}, 'port1': {'ipv4': {'10.0.96.152': {'prefix_length': 19}}, 'ipv6': {'fd00:d051::10:0:96:152': {'prefix_length': '64'}}}}
