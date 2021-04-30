@@ -1,0 +1,30 @@
+1 +3.3V alarm=0 value=3.2856 threshold_status=0
+2 +5V alarm=0 value=5.0235 threshold_status=0
+3 +12V alarm=0 value=12.136 threshold_status=0
+4 CPU VCCP alarm=0 value=0.9609 threshold_status=0
+5 CPU VTT alarm=0 value=1.0589 threshold_status=0
+6 CPU PVSA alarm=0 value=0.9315 threshold_status=0
+7 P1V8 alarm=0 value=1.7841 threshold_status=0
+8 P1V5 alarm=0 value=1.4999 threshold_status=0
+9 PCH +1.05V alarm=0 value=1.04 threshold_status=0
+10 VCC 2V5 alarm=0 value=2.432 threshold_status=0
+11 MAIN 12V alarm=0 value=11.904 threshold_status=0
+12 VCC 1V15 alarm=0 value=1.136 threshold_status=0
+13 DDR3 VTT alarm=0 value=0.736 threshold_status=0
+14 RPS 12V alarm=1 value=0 threshold_status=0x7
+15 NCT +3.3V alarm=0 value=3.216 threshold_status=0
+16 NCT VBAT alarm=0 value=3.264 threshold_status=0
+17 NCT +3.3VSB alarm=0 value=3.216 threshold_status=0
+18 NCT VTT alarm=0 value=1.04 threshold_status=0
+19 DTS CPU alarm=0 value=50 threshold_status=0
+20 CPU Core 0 alarm=0 value=49 threshold_status=0
+21 CPU Core 1 alarm=0 value=50 threshold_status=0
+22 TD1 alarm=0 value=37 threshold_status=0
+23 TD2 alarm=0 value=25 threshold_status=0
+24 FAN_TMP_3 alarm=0 value=35 threshold_status=0
+25 LM75 U72 alarm=0 value=28 threshold_status=0
+26 LM75 U65 alarm=0 value=31 threshold_status=0
+27 LM75 U62 alarm=0 value=32 threshold_status=0
+28 FAN1 alarm=0 value=4900 threshold_status=0
+29 FAN2 alarm=0 value=5000 threshold_status=0
+30 FAN3 alarm=0 value=4700 threshold_status=0

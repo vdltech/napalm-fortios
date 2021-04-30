@@ -436,29 +436,6 @@ class FortiOSDriver(NetworkDriver):
 
     def get_environment(self):
 
-        def parse_string(line):
-            return re.sub(' +', ' ', line.lower())
-
-        def search_disabled(line):
-            m = re.search("(.+?) (.+?) alarm=(.+?) \(scanning disabled\)", line)
-            return m.group(2)
-
-        def search_normal(line):
-            m = re.search("(.+?) (.+?) alarm=(.+?) value=(.+?) threshold_status=(.+?)", line)
-            return m
-
-        def get_fans(fan_lines):
-            output = dict()
-            for fan_line in fan_lines:
-                if 'disabled' in fan_line:
-                    name = search_disabled(fan_line)
-                    output[name] = dict(status=False)
-                    continue
-
-                m = search_normal(fan_line)
-                output[m.group(2)] = dict(status=True)
-            return output
-
         def get_cpu(cpu_lines):
             output = dict()
             for l in cpu_lines:
@@ -474,46 +451,39 @@ class FortiOSDriver(NetworkDriver):
             total, used = int(memory_line[1]) >> 20, int(memory_line[2]) >> 20  # byte to MB
             return dict(available_ram=total, used_ram=used)
 
-        def get_temperature(temperature_lines, detail_block):
-            output = dict()
-            for temp_line in temperature_lines:
-                if 'disabled' in temp_line:
-                    sensor_name = search_disabled(temp_line)
-                    output[sensor_name] = {'is_alert': False, 'is_critical': False,
-                                           'temperature': 0.0}
-                    continue
-
-                m = search_normal(temp_line)
-                sensor_name, temp_value, status = m.group(2), m.group(4), int(m.group(5))
-                is_alert = True if status == 1 else False
-
-                # find block
-                fullline = self._search_line_in_lines(sensor_name, detail_block)
-                index_line = detail_block.index(fullline)
-                sensor_block = detail_block[index_line:]
-
-                v = int(self._search_line_in_lines('upper_non_recoverable',
-                                                   sensor_block).split('=')[1])
-                temp_value = int(temp_value)
-
-                output[sensor_name] = dict(temperature=float(temp_value), is_alert=is_alert,
-                                           is_critical=True if temp_value > v else False)
-
-            return output
-
         out = dict()
 
-        sensors_block = [parse_string(x) for x in
-                         self._execute_command_with_vdom('execute sensor detail', vdom='global')
-                         if x]
+        #execute sensor detail is not available
+        sensors_block = self._execute_command_with_vdom('execute sensor list', vdom='global')
 
-        # temp
-        temp_lines = [x for x in sensors_block
-                      if any([True for y in ['dts', 'temp', 'adt7490'] if y in x])]
-        out['temperature'] = get_temperature(temp_lines, sensors_block)
+        temperatures=dict()
+        fans=dict()
+        powers = dict()
 
-        # fans
-        out['fans'] = get_fans([x for x in sensors_block if 'fan' in x and 'temp' not in x])
+        for line in sensors_block:
+            m = re.search("([0-9]+?) (.+\s[0-9]+?) (.+?) value=([0-9\.]+)", line)
+            if m:
+                if "TMP" in m.group(2).strip():
+                    sensor_name, temp_value=m.group(3).strip(), m.group(4)
+                    temp_value=float(temp_value)
+                    temperatures[sensor_name] = dict(temperature=temp_value, is_alert=False, is_critical=False)
+                elif "FAN" in m.group(2):
+                    fans[m.group(2)+" - "+m.group(3).strip()] = dict(status=True)
+            else:
+                m = re.search("([0-9]+?)\s(.+?)\s+alarm=([0-9]+)\s+value=([0-9\.]+)\s+threshold_status=([0-9]+)", line)
+                if m:
+                    if "TMP" in m.group(2) or "Temp" in m.group(2):
+                        sensor_name, temp_value=m.group(2).strip(), m.group(4)
+                        temp_value=float(temp_value)
+                        temperatures[sensor_name] = dict(temperature=temp_value, is_alert=int(m.group(5)), is_critical=int(m.group(3)))
+                    elif "FAN" in  m.group(2).upper():
+                        fans[m.group(2).strip()] = dict(status=(not bool(int(m.group(3)))))
+                    elif m.group(2)[0]=="+":
+                        powers[ m.group(2).strip()] = dict(status=(not bool(int(m.group(3)))), capacity=-1.0, output=-1.0)
+
+        out['fans'] = fans
+        out['temperature'] = temperatures
+        out['power'] = powers
 
         # cpu
         out['cpu'] = get_cpu(
@@ -522,16 +492,15 @@ class FortiOSDriver(NetworkDriver):
                                              vdom='global')[1:] if x])
 
         # memory
-        memory_command = 'diag hard sys mem | grep Mem:'
-        t = [x for x in
-             re.split('\s+', self._execute_command_with_vdom(memory_command,
-                                                             vdom='global')[0]) if x]
-        out['memory'] = get_memory(t)
-
-        # power, not implemented
-        sensors = [x.split()[1] for x in sensors_block if x.split()[0].isdigit()]
-        psus = {x for x in sensors if x.startswith('ps')}
-        out['power'] = {t: {'status': True, 'capacity': -1.0, 'output': -1.0} for t in psus}
+        memory_block = self._execute_command_with_vdom('diag hard sys mem | grep Mem', vdom='global')
+        out['memory'] = dict(available_ram=-1, used_ram=-1)
+        for line in memory_block:
+            if line.strip().startswith("MemTotal:"):
+                out['memory']["available_ram"]=(int(line.split()[1])>>10)
+            if line.strip().startswith("MemFree:"):
+                out['memory']["used_ram"]=(int(line.split()[1])>>10)
+            if line.strip().startswith("Mem:"):
+                out['memory']=get_memory(line.split())
 
         return out
 
@@ -555,3 +524,4 @@ class FortiOSDriver(NetworkDriver):
                 }
                 arp_table.append(entry)
         return arp_table
+
