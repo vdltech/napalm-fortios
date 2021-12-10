@@ -11,7 +11,6 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations under
 # the License.
-from __future__ import unicode_literals
 
 import re
 from pyFG.fortios import FortiOS, FortiConfig, logger
@@ -19,8 +18,9 @@ from pyFG.exceptions import FailedCommit, CommandExecutionException
 from napalm.base.exceptions import ReplaceConfigException, MergeConfigException
 from napalm.base.utils.string_parsers import colon_separated_string_to_dict,\
                                              convert_uptime_string_seconds
-from napalm.base.utils import py23_compat
-import napalm.base.helpers
+from napalm.base.helpers import textfsm_extractor, mac
+
+from netaddr import IPNetwork
 
 try:
     from napalm.base.base import NetworkDriver
@@ -36,11 +36,10 @@ class FortiOSDriver(NetworkDriver):
 
         if optional_args is not None:
             self.vdom = optional_args.get('fortios_vdom', None)
-        else:
-            self.vdom = None
+        if not self.vdom:
+            self.vdom = 'global'
 
-        self.device = FortiOS(hostname, username=username, password=password,
-                              timeout=timeout, vdom=self.vdom)
+        self.device = FortiOS(hostname, username=username, password=password, timeout=timeout, vdom=self.vdom)
         self.config_replace = False
 
     def open(self):
@@ -50,10 +49,8 @@ class FortiOSDriver(NetworkDriver):
         self.device.close()
 
     def is_alive(self):
-            """Returns a flag with the state of the SSH connection."""
-            return {
-                'is_alive': self.device.ssh.get_transport().is_active()
-            }
+        """Returns a flag with the state of the SSH connection."""
+        return {'is_alive': self.device.ssh.get_transport().is_active()}
 
     def _execute_command_with_vdom(self, command, vdom=None):
         # If the user doesn't specify a particular vdom we use the default vdom for the object.
@@ -171,40 +168,40 @@ class FortiOSDriver(NetworkDriver):
             text_result = '\n'.join(result)
 
             return {
-                'startup': u"",
-                'running': py23_compat.text_type(text_result),
-                'candidate': u"",
+                'startup': "",
+                'running': str(text_result),
+                'candidate': "",
             }
 
         elif get_startup or get_candidate:
             return {
-                'startup': u"",
-                'running': u"",
-                'candidate': u"",
+                'startup': "",
+                'running': "",
+                'candidate': "",
             }
 
     def get_facts(self):
         system_status = self._get_command_with_vdom('get system status', vdom='global')
-        performance_status = self._get_command_with_vdom('get system performance status',
-                                                         vdom='global')
+        performance_status = self._get_command_with_vdom('get system performance status', vdom='global')
 
-        interfaces = self._execute_command_with_vdom('get system interface | grep ==',
-                                                     vdom='global')
-        interface_list = [x.split()[2] for x in interfaces if x.strip() is not '']
+        interfaces = self._execute_command_with_vdom('get system interface | grep ==', vdom='global')
+        interface_list = [x.split()[2] for x in interfaces if x.strip() != '']
 
-        domain = self._get_command_with_vdom('get system dns | grep domain',
-                                             vdom='global')['domain']
+        domain = self._get_command_with_vdom('get system dns | grep domain', vdom='global')['domain']
 
         return {
-            'vendor': py23_compat.text_type('Fortigate'),
-            'os_version': py23_compat.text_type(system_status['Version'].split(',')[0].split()[1]),
+            'vendor': str('Fortigate'),
+            'os_version': str(system_status['Version'].split(',')[0].split()[1]),
             'uptime': convert_uptime_string_seconds(performance_status['Uptime']),
-            'serial_number': py23_compat.text_type(system_status['Serial-Number']),
-            'model': py23_compat.text_type(system_status['Version'].split(',')[0].split()[0]),
-            'hostname': py23_compat.text_type(system_status['Hostname']),
-            'fqdn': u'{}.{}'.format(system_status['Hostname'], domain),
+            'serial_number': str(system_status['Serial-Number']),
+            'model': str(system_status['Version'].split(',')[0].split()[0]),
+            'hostname': str(system_status['Hostname']),
+            'fqdn': '{}.{}'.format(system_status['Hostname'], domain),
             'interface_list': interface_list
         }
+
+    def get_lldp_neighbors(self):
+        return {}
 
     @staticmethod
     def _get_tab_separated_interfaces(output):
@@ -227,65 +224,90 @@ class FortiOSDriver(NetworkDriver):
             'mac_address': None
         }
 
-    def get_interfaces(self):
-        cmd_data = self._execute_command_with_vdom('diagnose hardware deviceinfo nic',
-                                                   vdom='global')
+    def _default_interface(self):
+        return {
+            "is_up": True,
+            "is_enabled": True,
+            "description": '',
+            "speed": 0,
+            "mtu": -1,
+            "last_flapped": -1.0,
+            "mac_address": ''
+        }
 
-        interface_list = [x.replace('\t', '') for x in cmd_data if x.startswith('\t')]
-        interface_statistics = {}
-        for interface in interface_list:
-            if_data = self._execute_command_with_vdom(
-                'diagnose hardware deviceinfo nic {}'.format(interface), vdom='global')
-            parsed_data = {}
-            if interface.startswith('mgmt'):
-                for line in if_data:
-                    if line.startswith('Speed'):
-                        if line.split('\t')[-1].split(' ')[0].isdigit():
-                            parsed_data['speed'] = int(line.split('\t')[-1].split(' ')[0])
-                        else:
-                            parsed_data['speed'] = -1
-                    elif line.startswith('Link'):
-                        parsed_data['is_up'] = line.split('\t')[-1] is 'up'
-                    elif line.startswith('Current_HWaddr'):
-                        parsed_data['mac_address'] = py23_compat.text_type(line.split('\t')[-1])
-                parsed_data['is_enabled'] = True
-                parsed_data['description'] = u''
-                parsed_data['last_flapped'] = -1.0
+    def get_interfaces(self):
+        # Get list of interfaces fromget system interface
+        get_system_interface = self._execute_command_with_vdom('get system interface', vdom='global')
+        info = textfsm_extractor(self, "get_system_interface", '\n'.join(get_system_interface))
+
+        interfaces = {}
+        for intf in info:
+            interfaces[intf["name"]] = self._default_interface()
+
+            if intf['type'] == 'physical':
+                diagnose_hardware = self._execute_command_with_vdom(f'diagnose hardware deviceinfo nic {intf["name"]}',
+                                                                    vdom='global')
+                phy_info = textfsm_extractor(self, "diagnose_hardware_deviceinfo_nic", '\n'.join(diagnose_hardware))
+                interfaces[intf["name"]].update({
+                    "speed": phy_info[0]['speed'],
+                    "is_enabled": phy_info[0]['enabled'] == 'up',
+                    "mac_address": phy_info[0]['mac'],
+                    "is_up": phy_info[0]['status'] == 'up',
+                })
             else:
-                for line in if_data:
-                    if line.startswith('Admin'):
-                        parsed_data['is_enabled'] = line.split(':')[-1] is 'up'
-                    elif line.startswith('PHY Status'):
-                        parsed_data['is_up'] = line.split(':')[-1] is 'up'
-                    elif line.startswith('PHY Speed'):
-                        parsed_data['speed'] = int(line.split(':')[-1])
-                    elif line.startswith('Current_HWaddr'):
-                        parsed_data['mac_address'] = py23_compat.text_type(line.split(' ')[-1])
-                parsed_data['description'] = u''
-                parsed_data['last_flapped'] = -1.0
-            interface_statistics[interface] = parsed_data
-        return interface_statistics
+                interfaces[intf["name"]].update({'type': 'virtual'})
+
+        # Get descriptions from show system interface
+        show_system_interface = self._execute_command_with_vdom('show system interface', vdom='global')
+        info = textfsm_extractor(self, "show_system_interface", '\n'.join(show_system_interface))
+        for intf in info:
+            if intf['name'] not in interfaces.keys():
+                interfaces[intf['name']] = self._default_interface()
+            if intf['alias']:
+                interfaces[intf["name"]]['description'] = intf['alias']
+            if intf['description']:
+                interfaces[intf["name"]]['description'] = intf['description']
+
+        return interfaces
 
     def get_interfaces_ip(self):
-        cmd = self._execute_command_with_vdom('get system interface physical', vdom='global')
-        interface_ip_dictionary = {}
-        if_name = None
-        for line in cmd:
-            interface_data = line.strip().split()
-            if len(interface_data)==0:
-                continue
-            if interface_data[0].startswith('==['):
-                m = re.search("==\[(.+)\]", interface_data[0])
-                if_name = m.group(1)
-            if if_name and interface_data[0]=="ip:" and interface_data[1][0]!='0':
-                interface_ip_dictionary[if_name]={}
-                interface_ip_dictionary[if_name]["ipv4"]={interface_data[1]: {'prefix_length': sum(bin(int(x)).count('1') for x in interface_data[2].split('.'))}}
-            if if_name and interface_data[0]=="ipv6:" and interface_data[1][0]!=':':
-                try:
-                    interface_ip_dictionary[if_name]["ipv6"]={interface_data[1].split('/')[0]: {'prefix_length': interface_data[1].split('/')[1]}}
-                except:
-                    interface_ip_dictionary[if_name]={"ipv6": {interface_data[1].split('/')[0]: {'prefix_length': interface_data[1].split('/')[1]}}}
-        return interface_ip_dictionary
+        show_system_interface = self._execute_command_with_vdom('show system interface', vdom='global')
+        info = textfsm_extractor(self, "show_system_interface", '\n'.join(show_system_interface))
+        interface_ip = {}
+        for intf in info:
+            if intf['ip']:
+                ip = IPNetwork(f"{intf['ip']}/{intf['netmask']}")
+                interface_ip[intf['name']] = {'ipv4': {intf['ip']: {'prefix_length': ip.prefixlen}}}
+
+        return interface_ip
+
+    def get_vlans(self):
+        show_system_interface = self._execute_command_with_vdom('show system interface', vdom='global')
+        info = textfsm_extractor(self, "show_system_interface", '\n'.join(show_system_interface))
+        vlans = {}
+        for intf in info:
+            if intf['vlan']:
+                if intf['vlan'] not in vlans.keys():
+                    vlans[intf['vlan']] = {'name': '', 'interfaces': []}
+                vlans[intf['vlan']]['interfaces'].append(intf['name'])
+        return vlans
+
+    def get_interfaces_vlans(self):
+        show_system_interface = self._execute_command_with_vdom('show system interface', vdom='global')
+        info = textfsm_extractor(self, "show_system_interface", '\n'.join(show_system_interface))
+        vlans = {}
+        for intf in info:
+            access_vlan = -1
+            if intf['vlan']:
+                access_vlan = intf['vlan']
+            vlans[intf['name']] = {
+                "mode": "access",
+                "access-vlan": access_vlan,
+                "trunk-vlans": [],
+                "native-vlan": -1,
+                "tagged-native-vlan": False,
+            }
+        return vlans
 
     @staticmethod
     def _search_line_in_lines(search, lines):
@@ -323,16 +345,16 @@ class FortiOSDriver(NetworkDriver):
             policy_item['position'] = position
             policy_item['packet_hits'] = -1
             policy_item['byte_hits'] = -1
-            policy_item['id'] = py23_compat.text_type(key)
+            policy_item['id'] = str(key)
             policy_item['enabled'] = enabled
-            policy_item['schedule'] = py23_compat.text_type(policy[key]['schedule'])
-            policy_item['log'] = py23_compat.text_type(logtraffic)
-            policy_item['l3_src'] = py23_compat.text_type(policy[key]['srcaddr'])
-            policy_item['l3_dst'] = py23_compat.text_type(policy[key]['dstaddr'])
-            policy_item['service'] = py23_compat.text_type(policy[key]['service'])
-            policy_item['src_zone'] = py23_compat.text_type(policy[key]['srcintf'])
-            policy_item['dst_zone'] = py23_compat.text_type(policy[key]['dstintf'])
-            policy_item['action'] = py23_compat.text_type(action)
+            policy_item['schedule'] = str(policy[key]['schedule'])
+            policy_item['log'] = str(logtraffic)
+            policy_item['l3_src'] = str(policy[key]['srcaddr'])
+            policy_item['l3_dst'] = str(policy[key]['dstaddr'])
+            policy_item['service'] = str(policy[key]['service'])
+            policy_item['src_zone'] = str(policy[key]['srcintf'])
+            policy_item['dst_zone'] = str(policy[key]['dstintf'])
+            policy_item['action'] = str(action)
             default_policy[key].append(policy_item)
 
             position = position + 1
@@ -354,7 +376,7 @@ class FortiOSDriver(NetworkDriver):
 
         self.device.load_config('router bgp')
 
-        for neighbor, parameters in neighbors.items():
+        for neighbor, parameters in list(neighbors.items()):
             logger.debug('NEW PEER')
             neigh_conf = self.device.running_config['router bgp']['neighbor']['{}'.format(neighbor)]
 
@@ -365,17 +387,16 @@ class FortiOSDriver(NetworkDriver):
                 neighbor_dict['remote_as'] = int(neigh_conf.get_param('remote-as'))
                 neighbor_dict['is_up'] = 'never' != parameters[7] or False
                 neighbor_dict['is_enabled'] = neigh_conf.get_param('shutdown') != 'enable' or False
-                neighbor_dict['description'] = u''
+                neighbor_dict['description'] = ''
                 neighbor_dict['uptime'] = convert_uptime_string_seconds(parameters[7])
                 neighbor_dict['address_family'] = dict()
                 neighbor_dict['address_family']['ipv4'] = dict()
                 neighbor_dict['address_family']['ipv6'] = dict()
 
-            detail_output = [x.lower() for x in
-                             self._execute_command_with_vdom(command_detail.format(neighbor))]
+            detail_output = [x.lower() for x in self._execute_command_with_vdom(command_detail.format(neighbor))]
             m = re.search('remote router id (.+?)\n', '\n'.join(detail_output))
             if m:
-                neighbor_dict['remote_id'] = py23_compat.text_type(m.group(1))
+                neighbor_dict['remote_id'] = str(m.group(1))
             else:
                 raise Exception('cannot find remote router id for %s' % neighbor)
 
@@ -384,13 +405,12 @@ class FortiOSDriver(NetworkDriver):
                 x = detail_output.index(' for address family: {} unicast'.format(family))
                 block = detail_output[x:]
 
-                for term, fortiname in terms.items():
+                for term, fortiname in list(terms.items()):
                     text = self._search_line_in_lines('%s prefixes' % fortiname, block)
                     t = [int(s) for s in text.split() if s.isdigit()][0]
                     neighbor_dict['address_family'][family][term] = t
 
-                received = self._execute_command_with_vdom(
-                    command_received.format(neighbor))[0].split()
+                received = self._execute_command_with_vdom(command_received.format(neighbor))[0].split()
                 if len(received) > 0:
                     neighbor_dict['address_family'][family]['received_prefixes'] = received[-1]
                 else:
@@ -398,12 +418,7 @@ class FortiOSDriver(NetworkDriver):
                     neighbor_dict['address_family'][family]['received_prefixes'] = 0
             peers[neighbor] = neighbor_dict
 
-        return {
-            'global': {
-                'router_id': py23_compat.text_type(bgp_sum[0].split()[3]),
-                'peers': peers
-            }
-        }
+        return {'global': {'router_id': str(bgp_sum[0].split()[3]), 'peers': peers}}
 
     def get_interfaces_counters(self):
         cmd = self._execute_command_with_vdom('fnsysctl ifconfig', vdom=None)
@@ -435,16 +450,13 @@ class FortiOSDriver(NetworkDriver):
         return interface_counters
 
     def get_environment(self):
-
         def get_cpu(cpu_lines):
             output = dict()
             for l in cpu_lines:
                 m = re.search('(.+?) states: (.+?)% user (.+?)% system (.+?)% nice (.+?)% idle', l)
                 cpuname = m.group(1)
                 idle = m.group(5)
-                output[cpuname] = {
-                    '%usage': 100.0 - int(idle)
-                }
+                output[cpuname] = {'%usage': 100.0 - int(idle)}
             return output
 
         def get_memory(memory_line):
@@ -456,51 +468,55 @@ class FortiOSDriver(NetworkDriver):
         #execute sensor detail is not available
         sensors_block = self._execute_command_with_vdom('execute sensor list', vdom='global')
 
-        temperatures=dict()
-        fans=dict()
+        temperatures = dict()
+        fans = dict()
         powers = dict()
 
         for line in sensors_block:
             m = re.search("([0-9]+?) (.+\s[0-9]+?) (.+?) value=([0-9\.]+)", line)
             if m:
                 if "TMP" in m.group(2).strip():
-                    sensor_name, temp_value=m.group(3).strip(), m.group(4)
-                    temp_value=float(temp_value)
+                    sensor_name, temp_value = m.group(3).strip(), m.group(4)
+                    temp_value = float(temp_value)
                     temperatures[sensor_name] = dict(temperature=temp_value, is_alert=False, is_critical=False)
                 elif "FAN" in m.group(2):
-                    fans[m.group(2)+" - "+m.group(3).strip()] = dict(status=True)
+                    fans[m.group(2) + " - " + m.group(3).strip()] = dict(status=True)
             else:
                 m = re.search("([0-9]+?)\s(.+?)\s+alarm=([0-9]+)\s+value=([0-9\.]+)\s+threshold_status=([0-9]+)", line)
                 if m:
                     if "TMP" in m.group(2) or "Temp" in m.group(2):
-                        sensor_name, temp_value=m.group(2).strip(), m.group(4)
-                        temp_value=float(temp_value)
-                        temperatures[sensor_name] = dict(temperature=temp_value, is_alert=int(m.group(5)), is_critical=int(m.group(3)))
-                    elif "FAN" in  m.group(2).upper():
+                        sensor_name, temp_value = m.group(2).strip(), m.group(4)
+                        temp_value = float(temp_value)
+                        temperatures[sensor_name] = dict(temperature=temp_value,
+                                                         is_alert=int(m.group(5)),
+                                                         is_critical=int(m.group(3)))
+                    elif "FAN" in m.group(2).upper():
                         fans[m.group(2).strip()] = dict(status=(not bool(int(m.group(3)))))
-                    elif m.group(2)[0]=="+":
-                        powers[ m.group(2).strip()] = dict(status=(not bool(int(m.group(3)))), capacity=-1.0, output=-1.0)
+                    elif m.group(2)[0] == "+":
+                        powers[m.group(2).strip()] = dict(status=(not bool(int(m.group(3)))),
+                                                          capacity=-1.0,
+                                                          output=-1.0)
 
         out['fans'] = fans
         out['temperature'] = temperatures
         out['power'] = powers
 
         # cpu
-        out['cpu'] = get_cpu(
-            [x for x in
-             self._execute_command_with_vdom('get system performance status | grep CPU',
-                                             vdom='global')[1:] if x])
+        out['cpu'] = get_cpu([
+            x for x in self._execute_command_with_vdom('get system performance status | grep CPU', vdom='global')[1:]
+            if x
+        ])
 
         # memory
         memory_block = self._execute_command_with_vdom('diag hard sys mem | grep Mem', vdom='global')
         out['memory'] = dict(available_ram=-1, used_ram=-1)
         for line in memory_block:
             if line.strip().startswith("MemTotal:"):
-                out['memory']["available_ram"]=(int(line.split()[1])>>10)
+                out['memory']["available_ram"] = (int(line.split()[1]) >> 10)
             if line.strip().startswith("MemFree:"):
-                out['memory']["used_ram"]=(int(line.split()[1])>>10)
+                out['memory']["used_ram"] = (int(line.split()[1]) >> 10)
             if line.strip().startswith("Mem:"):
-                out['memory']=get_memory(line.split())
+                out['memory'] = get_memory(line.split())
 
         return out
 
@@ -518,10 +534,9 @@ class FortiOSDriver(NetworkDriver):
                 address, age, mac, interface = line.split()
                 entry = {
                     "interface": interface,
-                    "mac": napalm_base.helpers.mac(mac).rstrip(),
+                    "mac": mac(mac).rstrip(),
                     "ip": address,
                     "age": age.replace("-", "-1"),
                 }
                 arp_table.append(entry)
         return arp_table
-
